@@ -1,0 +1,4 @@
+#!/bin/bash -e
+name=$(./software-info.pl software-internal-name)
+make -s exe64
+../bin/a6nt/$name.exe -b scheme.boot --libdirs ".;;..\\bin\\a6nt" "$@"

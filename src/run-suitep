@@ -1,0 +1,21 @@
+#!/bin/bash -e
+bits=32
+if [[ "$2" == "64" ]]; then bits=64; fi
+launch="./scheme$bits -q replp.ss run-mats.ss"
+
+find . -name "*.mo" -delete
+find . -name "*.html" -and -not -iwholename "*/web-mats/*" -delete
+rm -f "../data/server.profile"
+rm -f "../data/TestLog.db3"
+
+$launch <<EOF
+(run-suite "$1" ".")
+EOF
+
+# finish up
+$launch <<EOF
+(html-report "." "suite-report.html")
+(console-summary ".")
+EOF
+
+./dump-profile $bits

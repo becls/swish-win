@@ -1,0 +1,13 @@
+#!/bin/bash -e
+bits=32
+if [[ "$3" == "64" ]]; then bits=64; fi
+launch="./scheme$bits -q repl.ss $1.ms"
+
+find . -name "*.mo" -delete
+rm -f "../data/server.profile"
+rm -f "../data/TestLog.db3"
+
+$launch <<EOF
+(import (swish mat))
+(run-mats $2)
+EOF

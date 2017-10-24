@@ -1,0 +1,18 @@
+#!/usr/bin/perl -W
+
+if ($#ARGV < 1)
+{
+    print "Usage: $0 relative-path filename\n\n";
+    exit(-1);
+}
+
+$relpath = $ARGV[0];
+$filename = $ARGV[1];
+
+open INPUT, "$relpath/$filename";
+while (<INPUT>)
+{
+  s{\\}{/}g;
+  print "$relpath/$1 " if m/Include="([^"]+)"/ & $_ !~ /ProjectConfiguration/;
+}
+close INPUT;

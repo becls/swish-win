@@ -1,0 +1,1166 @@
+% Copyright 2017 Beckman Coulter, Inc.
+%
+% Permission is hereby granted, free of charge, to any person
+% obtaining a copy of this software and associated documentation files
+% (the "Software"), to deal in the Software without restriction,
+% including without limitation the rights to use, copy, modify, merge,
+% publish, distribute, sublicense, and/or sell copies of the Software,
+% and to permit persons to whom the Software is furnished to do so,
+% subject to the following conditions:
+%
+% The above copyright notice and this permission notice shall be
+% included in all copies or substantial portions of the Software.
+%
+% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+% EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+% MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+% NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+% BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+% ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+% CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+% SOFTWARE.
+
+\chapter {Operating System Interface}\label{chap:osi}
+
+\section {Introduction}
+
+This chapter describes the operating system interface. Swish is
+written in Chez Scheme and runs on Microsoft Windows.  The operating
+system interface provides the functions by which Swish communicates
+asynchronously with external processes. In addition, it
+provides SQLite~\cite{sqlite-guide} database support and access to
+operating system functions that Chez Scheme lacks.
+
+\section {Theory of Operation}
+
+The operating system interface is written in Microsoft Visual C++ for
+Windows Vista and later. It can be compiled for 32-bit or 64-bit
+architectures. It is statically linked against Chez Scheme 9.5.
+Please refer to Chapter~4 of the \emph{Chez Scheme Version 9 User's
+  Guide}~\cite{chez-scheme-users-guide} for information on the foreign
+function interface.
+
+Swish provides a console program that supports the same
+command-line arguments as Chez Scheme.  In addition, if the first
+three arguments are \texttt{--service \var{service-name}
+  \var{log-file}}, the program comes up as service
+\var{service-name}. It redirects its standard output and standard
+error to append to \var{log-file}, and it redirects its standard input
+from \texttt{NUL}.  If it cannot open \var{log-file}, it reports a
+custom event to the Windows event manager with a descriptive error
+string. Once \var{log-file} is opened, fatal errors in the operating
+system interface are logged to \var{log-file} in the same format as
+\code{console-event-handler}. In the service main function, it sets
+the service state to running and boots the system by passing the rest
+of the command-line arguments to the standard Scheme main
+procedure. When the Windows service control manager makes a stop or
+shutdown request, the program sets the service state to
+stop-pending and posts a completion packet to Scheme that calls the
+\texttt{app:shutdown} procedure with no arguments using the completion
+port mechanism described below. This procedure performs an orderly
+shut down of the program and then calls \texttt{osi::ExitProcess}
+to set the service state to stopped and terminate with the given exit
+code.
+
+Swish minimizes its load-time dependencies on external run-time
+libraries.  The Swish application includes all the operating system
+interface code and the statically compiled Chez Scheme run-time
+library, and it is statically linked against the multi-threaded
+run-time library.  As a result, the application requires no dynamic
+link libraries that are not guaranteed to be installed on Microsoft
+Windows.
+
+The single threaded version of Chez Scheme is used because of its
+simplicity. All Scheme code runs in the main thread. In order to keep
+this thread responsive, operations that block for more than a few
+milliseconds are performed asynchronously.
+
+The operating system interface uses one high-performance I/O
+completion port~\cite{multithreaded-async-io} for all asynchronous
+operations. Microsoft Windows supports I/O completion ports for most
+types of I/O operations. For operations that do not support them, the
+operating system interface uses a worker thread to perform the
+operation and to post a completion packet to the completion port.  The
+worker threads are managed by the Microsoft Windows thread pool
+because of its simplicity and efficiency. The Scheme code services the
+completion port in the main thread. See Chapter~\ref{chap:erlang} for
+details on how the Scheme code interacts with the operating system
+interface.
+
+For each asynchronous function in the operating system interface, a
+Scheme callback procedure is passed as the last argument.  This
+callback procedure is later returned to Scheme in a completion packet
+that includes the results of the asynchronous function call.
+
+Scheme object locking and unlocking is handled by the operating system
+interface because it manages the data structures that contain pointers
+to Scheme objects.
+
+The operating system interface uses Scheme fixnum handles to refer to
+the objects it manages. \concern{Using a deallocated or invalid handle
+  causes incorrect behavior.} \mitigation The operating system
+interface maintains and checks the set of allocated handles.  It does
+not reuse a deallocated handle until the entire space of fixnums has
+been exhausted: $2^{30}$ for the 32-bit version and $2^{60}$ for the
+64-bit version.  To make the process of finding a new handle
+efficient, it increments a counter by an odd number and accounts for
+fixnum overflow. Moreover, it uses prime numbers close to $2^{15}$ as
+the increments so that the different handle types use different
+numbers most of the time.
+
+The operating system interface uses port objects for USB devices,
+named pipes to other processes, files, console input, and TCP/IP
+connections.  A port object is created by the various open functions,
+which return a port handle that is used for read, write, and close
+operations. Once the port is closed, the port object is freed.
+
+The operating system interface explicitly uses the Unicode
+\emph{W}-suffix versions of Microsoft Windows functions to eliminate
+the possibility of accidentally using the ANSI \emph{A}-suffix
+versions.
+
+For interface functions that can fail, an error pair\index{error pair}
+\code{(\var{who} . \var{errno})} is returned, where \var{who} is a
+symbol representing the name of the particular function that failed
+with the Microsoft Windows system error number \var{errno}.  Functions
+passed an invalid handle return the error pair
+\code{(\var{function-name} . \textrm{ERROR\_INVALID\_HANDLE})}.
+Close functions such as \code{CloseHandle}, \code{closesocket},
+and \code{FindClose} are used when deallocating objects.  Because
+the deallocated objects are no longer referenced, failures in these
+functions are not reported.
+
+The operating system interface uses the \code{timeBeginPeriod} function
+in \texttt{mmsystem.dll} to set the operating system timer resolution
+to one millisecond per tick in order to provide the highest resolution
+timing available. The Microsoft Developer Network documentation warns:
+``Setting a higher resolution can improve the accuracy of time-out
+intervals in wait functions. However, it can also reduce overall
+system performance, because the thread scheduler switches tasks more
+often. High resolutions can also prevent the CPU power management
+system for entering power-saving modes.''  We tested the Intel T7400
+2.16GHz breadboard systems with a resolution of one millisecond and
+did not experience any slow-down.
+
+The operating system interface detects system sleep and resume
+operations so that it can properly maintain the clock time to
+tick-count offset. It detects power events using the service control
+handler when running as a service and the \code{WM\_BROADCAST}
+message to a hidden window on a worker thread when not running as a
+service.  When a power event is detected, a completion packet is
+posted to Scheme that calls \code{app:suspend} or
+\code{app:resume}.
+
+The operating system interface uses the C++ namespace \code{osi} for
+its functions so that it can use the same names as the Microsoft
+Windows functions when the functions are essentially equivalent.
+
+The operating system interface provides database support through
+SQLite 3, an ``in-process library that implements a self-contained,
+serverless, zero-configuration, transactional SQL database engine.''
+The source code is in the public domain, is thoroughly tested, and is
+supported by many companies. See \url{http://www.sqlite.org} for more
+information.
+
+Section~\ref{sec:osi-api} describes the programming interface from the
+C++ side. The Scheme library \code{(osi)} provides foreign
+procedures for each C++ function using the same name but without the
+\code{osi::} prefix. Chez Scheme does not support C++ \code{bool}
+return types, so \code{int} is used instead. For functions that may
+return error pair \code{(\var{who} . \var{errno})}, e.g.,
+\code{osi::ReadPort}, the corresponding Scheme procedure $p$, e.g.,
+\code{ReadPort}, raises exception \code{\#(osi-error $p$ \var{who}
+  \var{errno})}. In addition, the \code{(osi)} library exports
+another procedure with the \verb|*| suffix, e.g., \code{ReadPort*},
+that returns the error pair.
+
+\section {Programming Interface}\label{sec:osi-api}
+
+\subsection {Completion Packet Functions}
+
+\defineentry{osi::IsCompletionPacketReady}
+\begin{function}
+  int \code{osi::IsCompletionPacketReady}();
+\end{function}\antipar
+
+The \code{osi::IsCompletionPacketReady} function returns true if a
+completion packet is ready on the completion port and false otherwise.
+
+\defineentry{osi::GetCompletionPacket}
+\begin{function}
+  ptr \code{osi::GetCompletionPacket}(UINT32 \var{timeout});
+\end{function}\antipar
+
+The \code{osi::GetCompletionPacket} function retrieves the next
+completion packet from the completion port or \code{\#f} if no
+packet is ready within \var{timeout} milliseconds. A completion packet
+is the list \code{(\var{callback} \var{result} \etc)}, where
+\var{callback} is the callback procedure passed to the asynchronous
+function that returned one or more \var{result}s.
+
+\subsection {Port Functions}
+
+The port functions in this section provide generic read, write, and
+close operations for port objects. The specific implementation depends
+on the type of port object, e.g., USB, pipe, process, file, console,
+and TCP/IP.
+
+\defineentry{osi::ReadPort}
+\begin{function}\begin{tabular}[t]{@{}l@{}l}
+  ptr \code{osi::ReadPort}(& iptr \var{port}, ptr \var{buffer}, size\_t \var{startIndex}, UINT32 \var{size},\\
+  & ptr \var{filePosition}, ptr \var{callback});
+\end{tabular}\end{function}\antipar
+
+The \code{osi::ReadPort} function issues a read on the given
+\var{port} of \var{size} bytes into the bytevector \var{buffer} at the
+zero-based \var{startIndex}.  For file ports, \var{filePosition}
+specifies the starting file position; for all other port types,
+\var{filePosition} must be \code{\#f}.  The function returns
+\code{\#t} when the read operation is issued and an error pair
+otherwise. When the read operation finishes, it enqueues the
+completion packet \code{(\var{callback} \var{count} \var{errno})},
+where \var{count} is the number of bytes read and \var{errno} is the
+error number. A zero \var{errno} indicates a successful read
+operation. Both \var{count} and \var{errno} are returned because read
+functions such as \code{ReadFile} set both values.
+
+\defineentry{osi::WritePort}
+\begin{function}\begin{tabular}[t]{@{}l@{}l}
+  ptr \code{osi::WritePort}(& iptr \var{port}, ptr \var{buffer}, size\_t \var{startIndex}, UINT32 \var{size},\\
+  & ptr \var{filePosition}, ptr \var{callback});
+\end{tabular}\end{function}\antipar
+
+The \code{osi::WritePort} function issues a write on the given
+\var{port} of \var{size} bytes from the bytevector \var{buffer} at the
+zero-based \var{startIndex}.  For file ports, \var{filePosition}
+specifies the starting file position; for all other port types,
+\var{filePosition} must be \code{\#f}.  The function returns
+\code{\#t} when the write operation is issued and an error pair
+otherwise.  When the write operation finishes, it enqueues the
+completion packet (\var{callback} \var{count} \var{errno}), where
+\var{count} is the number of bytes written and \var{errno} is the
+error number.  A zero \var{errno} indicates a successful write
+operation. Both \var{count} and \var{errno} are returned because write
+functions such as \code{WriteFile} set both values.
+
+\defineentry{osi::ClosePort}
+\begin{function}
+  ptr \code{osi::ClosePort}(iptr \var{port});
+\end{function}\antipar
+
+The \code{osi::ClosePort} function closes and deallocates the port
+object of the given \var{port} handle. It returns \code{\#t} when
+the port is closed and deallocated and an error pair when \var{port}
+is an invalid handle. Errors in the underlying close functions such
+as \code{CloseHandle} and \code{closesocket} are not reported.
+
+\subsection {USB Functions}
+
+\defineentry{osi::GetDeviceNames}
+\begin{function}
+  ptr \code{osi::GetDeviceNames}(ptr \var{deviceInterface});
+\end{function}\antipar
+
+The \code{osi::GetDeviceNames} function uses the
+\code{SetupDiGetClassDevsW} and associated functions in
+\texttt{setupapi.dll} to determine the list of currently present
+devices with the given \var{deviceInterface} GUID. It returns a list
+of device name strings when successful and an error pair when
+unsuccessful.
+
+\defineentry{osi::ConnectWinUSB}
+\begin{function}\begin{tabular}[t]{@{}l@{}l}
+  ptr \code{osi::ConnectWinUSB}(& ptr \var{deviceName}, UCHAR \var{readAddress},\\
+  & UCHAR \var{writeAddress});
+\end{tabular}\end{function}\antipar
+
+The \code{osi::ConnectWinUSB} function returns a handle to a port that
+communicates with the device named by the string \var{deviceName}
+using the Microsoft WinUSB driver~\cite{winusb} when successful and an
+error pair when unsuccessful. Read operations are performed using USB
+bulk or interrupt transfers on the endpoint \var{readAddress}, and
+write operations are performed using USB bulk or interrupt transfers
+on the endpoint \var{writeAddress}. The user-mode library of WinUSB,
+\texttt{winusb.dll}, is included with all versions of Microsoft
+Windows since Vista.
+
+\subsection {Pipe Functions}
+
+\defineentry{osi::CreateServerPipe}
+\begin{function}
+  ptr \code{osi::CreateServerPipe}(ptr \var{name}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::CreateServerPipe} function uses the
+\code{CreateNamedPipeW} function in \texttt{kernel32.dll} to create
+a single instance of an asynchronous, bidirectional, byte-stream pipe
+of the given \var{name}. It returns a port handle when successful and
+an error pair when unsuccessful. The \code{ConnectNamedPipe}
+function in \texttt{kernel32.dll} is used to wait for a client to
+connect. When it finishes, the completion packet
+\code{(\var{callback} \var{count} \var{errno})} is enqueued. The
+\var{count} parameter is 0 and can be ignored.
+
+\defineentry{osi::CreateClientPipe}
+\begin{function}
+  ptr \code{osi::CreateClientPipe}(ptr \var{name});
+\end{function}\antipar
+
+The \code{osi::CreateClientPipe} function uses the
+\code{CreateFileW} function in \texttt{kernel32.dll} to connect to
+an asynchronous, bidirectional, byte-stream pipe of the given
+\var{name}. It returns a port handle when successful and an error pair
+when unsuccessful.
+
+\subsection {Process Functions}
+
+\defineentry{osi::CreateDetachedWatchedProcess}
+\begin{function}
+  ptr \code{osi::CreateDetachedWatchedProcess}(ptr \var{commandLine}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::CreateDetachedWatchedProcess} function uses the
+\code{CreateProcessW} function in \texttt{kernel32.dll} to create a
+process with the given \var{commandLine} string and the
+\texttt{DETACHED\_PROCESS} flag.  In addition, it directs a wait
+thread in the thread pool to watch the process using the
+\code{RegisterWaitForSingleObject} function in
+\texttt{kernel32.dll}.  When the process exits, the wait thread
+enqueues the completion packet \code{(\var{callback} \var{process}
+  \var{exitCode})}, where \var{process} is the fixnum process handle,
+and \var{exitCode} is the unsigned 32-bit integer exit code of the
+process.
+
+The \code{osi::CreateDetachedWatchedProcess} function returns
+\var{process} when the process has been successfully created and
+watched and an error pair otherwise.  \var{process} is the fixnum
+process handle that can be used to terminate the process using
+\code{osi::TerminateProcess}.
+
+Chez Scheme provides procedures such as \code{system} and
+\code{process} for creating subprocesses. These procedures are not
+used because they do not provide procedures for watching or
+terminating processes.
+
+\defineentry{osi::CreateWatchedProcess}
+\begin{function}
+  ptr \code{osi::CreateWatchedProcess}(ptr \var{commandLine}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::CreateWatchedProcess} function uses the
+\code{CreateProcessW} function in \texttt{kernel32.dll} to create a
+process with the given \var{commandLine} string whose standard input,
+output and error are connected to a uniquely named pipe.  In addition,
+it directs a wait thread in the thread pool to watch the process using
+the \code{RegisterWaitForSingleObject} function in
+\texttt{kernel32.dll}.  When the process exits, the wait thread
+enqueues the completion packet \code{(\var{callback} \var{process}
+  \var{exitCode})}, where \var{process} is the fixnum process handle,
+and \var{exitCode} is the unsigned 32-bit integer exit code of the
+process.
+
+The \code{osi::CreateWatchedProcess} function returns
+\code{\#(<process> \var{process} \var{iport} \var{oport})} when the
+process has been successfully created and watched and an error pair
+otherwise.  \var{process} is the fixnum process handle that can be
+used to terminate the process using \code{osi::TerminateProcess}.
+\var{iport} is a handle to a port that reads from the standard output
+and the standard error of the process.  \var{oport} is a handle to a
+port that writes to the standard input of the process.
+
+The standard I/O handles for the process are opened in blocking mode,
+and Microsoft Windows serializes all blocking I/O requests on a named
+pipe instance. To avoid this undesirable serialization, two named pipe
+instances are used: one for standard input, and one for standard
+output and standard error. Consequently, the process may issue a write
+operation on one thread while a read operation is blocking on another
+thread.  The standard output and standard error are combined because
+there is no need to distinguish the source of the output.
+
+Chez Scheme provides procedures such as \code{system} and
+\code{process} for creating subprocesses. These procedures are not
+used because they use blocking I/O. Moreover, Chez Scheme does not
+provide procedures for watching or terminating subprocesses.
+
+\defineentry{osi::ExitProcess}
+\begin{function}
+  void \code{osi::ExitProcess}(UINT32 \var{exitCode});
+\end{function}\antipar
+
+The \code{osi::ExitProcess} function uses \code{ExitProcess} in
+\texttt{kernel32.dll} to exit the current process with exit code
+\var{exitCode}. It does not return.
+
+If the program is running as a service, event
+\code{\#(ExitProcess \var{exitCode})} is logged to the service log
+file in the same format as \code{console-event-handler}, and the
+service is marked stopped before the process exits when the exit code
+is 0.
+
+The \code{exit} procedure in Chez Scheme is not used because its
+behavior depends on the \code{exit-handler} parameter.
+
+\defineentry{osi::TerminateProcess}
+\begin{function}
+  ptr \code{osi::TerminateProcess}(iptr \var{process}, UINT32
+  \var{exitCode});
+\end{function}\antipar
+
+The \code{osi::TerminateProcess} function uses
+\code{TerminateProcess} in \texttt{kernel32.dll} to terminate a
+\var{process} created by \code{osi::CreateWatchedProcess} with exit
+code \var{exitCode}. It returns \code{\#t} when successful and an
+error pair when unsuccessful.
+
+\defineentry{osi::SetMainThreadPriority}
+\begin{function}
+  ptr \code{osi::SetMainThreadPriority}(int \var{priority});
+\end{function}\antipar
+
+The \code{osi::SetMainThreadPriority} function uses
+\code{SetThreadPriority} in \texttt{kernel32.dll} to set the
+priority of the main thread of the program to \var{priority}. It
+returns \code{\#t} when successful and an error pair when
+unsuccessful.
+
+\defineentry{osi::SetPriorityClass}
+\begin{function}
+  ptr \code{osi::SetPriorityClass}(UINT32 \var{priorityClass});
+\end{function}\antipar
+
+The \code{osi::SetPriorityClass} function uses
+\code{SetPriorityClass} in \texttt{kernel32.dll} to set the priority
+class of the process to \var{priorityClass}. It returns
+\code{\#t} when successful and an error pair when unsuccessful.
+
+\subsection {SQLite Functions}
+
+When a SQLite database is opened, the operating system interface
+tracks the database handle until the database is closed in order to
+avoid passing an invalid handle to SQLite. Similarly, it tracks
+prepared statement handles until they are finalized.  Functions passed
+an invalid database or statement handle return error pair
+\code{(\var{function-name} . \textrm{ERROR\_INVALID\_HANDLE})}.
+
+SQLite is compiled in multi-thread mode. The documentation states:
+``In this mode, SQLite can be safely used by multiple threads provided
+that no single database connection is used simultaneously in two or
+more threads.''  \concern{Two threads simultaneously access a SQLite
+  database connection.} \mitigation The operating system interface
+maintains a busy bit for each database handle. Functions attempting to
+access a busy database return the error pair
+\code{(\var{function-name}~.~\textrm{ERROR\_ACCESS\_DENIED})}.
+
+SQLite has five data types, which are mapped as follows to Scheme data
+types:
+
+\begin{center}
+\begin{tabular}{|l|l|}
+  \multicolumn{1}{l}{\emph{SQLite}} & \multicolumn{1}{l}{\emph{Scheme}} \\
+  \hline
+  NULL & \code{\#f} \\
+  INTEGER & exact integer \\
+  REAL & flonum \\
+  TEXT & string \\
+  BLOB & bytevector \\
+  \hline
+\end{tabular}
+\end{center}
+
+SQLite extended result codes are enabled. Because the error codes
+overlap system error codes, the operating system interface maps them
+to system error codes by adding 600,000,000, which sets bit 29 to
+indicate application-defined error codes.  The
+\code{osi::GetErrorString} function supports these mapped error
+codes.
+
+\defineentry{osi::OpenDatabase}
+\begin{function}
+  ptr \code{osi::OpenDatabase}(ptr \var{filename}, int \var{flags});
+\end{function}\antipar
+
+The \code{osi::OpenDatabase} function uses
+\code{sqlite3\_open\_v2} to open the database specified by the
+\var{filename} string and \var{flags}. The \var{flags} specify, for
+example, whether the database should be opened in read-only mode or
+whether it should be created when the file does not exist. The
+function returns a database handle when successful and an error pair
+when unsuccessful.
+
+\defineentry{osi::CloseDatabase}
+\begin{function}
+  ptr \code{osi::CloseDatabase}(iptr \var{database});
+\end{function}\antipar
+
+The \code{osi::CloseDatabase} function finalizes all prepared
+statements in the given \var{database} and uses
+\code{sqlite3\_close} to close the \var{database}. It returns
+\code{\#t} when successful and an error pair when unsuccessful.
+
+\defineentry{osi::PrepareStatement}
+\begin{function}
+  ptr \code{osi::PrepareStatement}(iptr \var{database}, ptr \var{sql});
+\end{function}\antipar
+
+The \code{osi::PrepareStatement} function uses
+\code{sqlite3\_prepare\_v2} to prepare the given \var{sql}
+statement. It returns a statement handle when successful and an error
+pair when unsuccessful.
+
+\defineentry{osi::FinalizeStatement}
+\begin{function}
+  ptr \code{osi::FinalizeStatement}(iptr \var{statement});
+\end{function}\antipar
+
+The \code{osi::FinalizeStatement} function uses
+\code{sqlite3\_finalize} to finalize the \var{statement}.  It
+returns \code{\#t} when successful and an error pair when
+unsuccessful. The return code from \code{sqlite3\_finalize} is not
+checked because the statement is finalized regardless of the return
+value.
+
+\defineentry{osi::BindStatement}
+\begin{function}
+  ptr \code{osi::BindStatement}(iptr \var{statement}, UINT32 \var{index}, ptr \var{datum});
+\end{function}\antipar
+
+The \code{osi::BindStatement} function maps the Scheme \var{datum}
+to SQLite and binds it to the \var{statement} at the zero-based SQL
+parameter \var{index}.  It returns \code{\#t} when successful and an
+error pair when unsuccessful. The error pair
+\code{(osi::BindStatement . \textrm{ERROR\_BAD\_ARGUMENTS})} is
+returned when \code{datum} cannot be mapped to SQLite.
+
+\defineentry{osi::ClearStatementBindings}
+\begin{function}
+  ptr \code{osi::ClearStatementBindings}(iptr \var{statement});
+\end{function}\antipar
+
+The \code{osi::ClearStatementBindings} function uses
+\code{sqlite3\_clear\_bindings} to clear the bindings for the
+\var{statement}. It returns \code{\#t} when successful and an error
+pair when unsuccessful.
+
+\defineentry{osi::GetLastInsertRowid}
+\begin{function}
+  ptr \code{osi::GetLastInsertRowid}(iptr \var{database});
+\end{function}\antipar
+
+The \code{osi::GetLastInsertRowid} function uses
+\code{sqlite3\_last\_insert\_rowid} to return the last insert rowid
+of the \var{database} when successful and an error pair when
+unsuccessful.
+
+\defineentry{osi::GetStatementColumns}
+\begin{function}
+  ptr \code{osi::GetStatementColumns}(iptr \var{statement});
+\end{function}\antipar
+
+The \code{osi::GetStatementColumns} function uses
+\code{sqlite3\_column\_count} and \code{sqlite3\_column\_name} to
+return a vector of column name strings for the \var{statement} when
+successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetStatementSQL}
+\begin{function}
+  ptr \code{osi::GetStatementSQL}(iptr \var{statement});
+\end{function}\antipar
+
+The \code{osi::GetStatementSQL} function uses \code{sqlite3\_sql}
+to return the \var{sql} string associated with the \var{statement}
+when successful and an error pair when unsuccessful.
+
+\defineentry{osi::ResetStatement}
+\begin{function}
+  ptr \code{osi::ResetStatement}(iptr \var{statement});
+\end{function}\antipar
+
+The \code{osi::ResetStatement} function uses \code{sqlite3\_reset}
+to reset the \var{statement}. It returns \code{\#t} when
+successful and an error pair when unsuccessful.
+
+\defineentry{osi::StepStatement}
+\begin{function}
+  ptr \code{osi::StepStatement}(iptr \var{statement}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::StepStatement} function sets the busy bit for the
+database associated with \var{statement}, starts a worker thread, and
+returns \code{\#t} when the worker thread starts and an error pair
+otherwise. The worker thread uses \code{sqlite3\_step} to execute
+the \var{statement}. If it returns SQLITE\_DONE, the completion packet
+\code{(\var{callback} \#f)} is enqueued. If it returns SQLITE\_ROW,
+the completion packet \code{(\var{callback} \#(\var{value} \etc))}
+is enqueued with the vector of column values mapped from SQLite to
+Scheme. Otherwise, the completion packet \code{(\var{callback}
+  \var{error-pair})} is enqueued. The database busy bit is cleared
+when the completion packet is dequeued.
+
+\defineentry{osi::GetSQLiteStatus}
+\begin{function}
+  ptr \code{osi::GetSQLiteStatus}(int \var{operation}, bool \var{reset});
+\end{function}\antipar
+
+The \code{osi::GetSQLiteStatus} function uses the experimental
+\code{sqlite3\_status} function with the given \var{operation} and
+\var{reset} flag to return \code{\#(\var{current} \var{highwater})}
+when successful and an error pair when unsuccessful.
+
+\subsection {File System Functions}
+
+\defineentry{osi::CreateFile}
+\begin{function}\begin{tabular}[t]{@{}l@{}l}
+  ptr \code{osi::CreateFile}(& ptr \var{name}, UINT32 \var{desiredAccess}, UINT32 \var{shareMode},\\
+  & UINT32 \var{creationDisposition});
+\end{tabular}\end{function}\antipar
+
+The \code{osi::CreateFile} function creates or opens a file for
+asynchronous access and returns a port handle when successful and an
+error pair when unsuccessful. It uses the following function in
+\texttt{kernel32.dll}:\antipar
+
+\begin{center}\begin{tabular}{@{}l@{}l}
+\code{CreateFileW}(&\var{wname}, \var{desiredAccess}, \var{shareMode}, NULL,\\
+& \var{creationDisposition}, FILE\_FLAG\_OVERLAPPED, NULL);
+\end{tabular}\end{center}
+
+The file \var{name} string is converted to the UTF-16LE encoded
+\var{wname}.
+
+Chez Scheme provides procedures such as \code{open-input-file} and
+\code{open-output-file} for creating and opening files. These
+procedures are not used because they use blocking I/O.
+
+\defineentry{osi::CreateHardLink}
+\begin{function}
+  ptr \code{osi::CreateHardLink}(ptr \var{fromPath}, ptr \var{toPath});
+\end{function}\antipar
+
+The \code{osi::CreateHardLink} function uses the
+\code{CreateHardLinkW} function in \texttt{kernel32.dll} to create a
+hard link from the file with the string \var{fromPath} to the file
+with the string \var{toPath}. It returns \code{\#t} when successful
+and an error pair when unsuccessful.
+
+\defineentry{osi::DeleteFile}
+\begin{function}
+  ptr \code{osi::DeleteFile}(ptr \var{name});
+\end{function}\antipar
+
+The \code{osi::DeleteFile} function uses the \code{DeleteFileW}
+function in \texttt{kernel32.dll} to delete the file with the string
+\var{name}. It returns \code{\#t} when successful and an error pair
+when unsuccessful.
+
+The Chez Scheme procedure \code{delete-file} is not used because it
+does not return a specific error code when it fails.
+
+\defineentry{osi::MoveFile}
+\begin{function}
+  ptr \code{osi::MoveFile}(ptr \var{existingPath}, ptr
+  \var{newPath}, UINT32 \var{flags});
+\end{function}\antipar
+
+The \code{osi::MoveFile} function uses the \code{MoveFileExW}
+function in \texttt{kernel32.dll} to move the existing file or
+directory with the string \var{existingPath} to the new file or
+directory with the string \var{newPath}. The \var{flags} specify, for
+example, whether the file should replace an existing file if
+\var{newPath} already exists. \code{osi::MoveFile} returns
+\code{\#t} when successful and an error pair when unsuccessful.
+
+The Chez Scheme procedure \code{rename-file} is not used because it
+does not include an option to replace an existing file and does not
+return a specific error code when it fails.
+
+\defineentry{osi::CreateDirectory}
+\begin{function}
+  ptr \code{osi::CreateDirectory}(ptr \var{path});
+\end{function}\antipar
+
+The \code{osi::CreateDirectory} function uses the
+\code{CreateDirectoryW} function in \texttt{kernel32.dll} to create
+the directory with the string \var{path}. It returns \code{\#t} when
+successful and an error pair when unsuccessful.
+
+The Chez Scheme procedure \code{mkdir} is not used because it does
+not return a specific error code when it fails.
+
+\defineentry{osi::RemoveDirectory}
+\begin{function}
+  ptr \code{osi::RemoveDirectory}(ptr \var{path});
+\end{function}\antipar
+
+The \code{osi::RemoveDirectory} function uses the
+\code{RemoveDirectoryW} function in \texttt{kernel32.dll} to remove
+the directory with the string \var{path}. It returns \code{\#t} when
+successful and an error pair when unsuccessful.
+
+The Chez Scheme procedure \code{delete-directory} is not used
+because it does not return a specific error code when it fails.
+
+\defineentry{osi::FindFiles}
+\begin{function}
+  ptr \code{osi::FindFiles}(ptr \var{spec}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::FindFiles} function uses a worker thread to build the
+list of files and directories that match the string \var{spec}. It
+returns \code{\#t} when the worker thread starts and an error pair
+otherwise.  The worker thread uses the \code{FindFirstFileW},
+\code{FindNextFileW}, and \code{FindClose} functions in
+\texttt{kernel32.dll}.  When successful, the completion packet
+\code{(\var{callback} (\var{name} \etc))} is enqueued with the list
+of matching names, excluding ``.''  and ``..''. When unsuccessful, the
+completion packet \code{(\var{callback} \var{error-pair})} is
+enqueued.
+
+The Chez Scheme procedure \code{directory-list} is not used because
+it uses blocking I/O.
+
+\defineentry{osi::GetDiskFreeSpace}
+\begin{function}
+  ptr \code{osi::GetDiskFreeSpace}(ptr \var{path});
+\end{function}\antipar
+
+The \code{osi::GetDiskFreeSpace} function uses the
+\code{GetDiskFreeSpaceExW} function in \texttt{kernel32.dll} to
+return the total number of free bytes available to the user of the
+current process on the disk containing the directory with the string
+\var{path} when successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetExecutablePath}
+\begin{function}
+  ptr \code{osi::GetExecutablePath}();
+\end{function}\antipar
+
+The \code{osi::GetExecutablePath} function uses the
+\code{GetModuleFileNameW} function in \texttt{kernel32.dll} to
+return the full path string of the executable file of the current
+process when successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetFileSize}
+\begin{function}
+  ptr \code{osi::GetFileSize}(iptr \var{port});
+\end{function}\antipar
+
+The \code{osi::GetFileSize} function uses the \code{GetFileSizeEx}
+function in \texttt{kernel32.dll} to return the current size of the
+file associated with the given file \var{port} when successful and an
+error pair when unsuccessful.
+
+\defineentry{osi::GetFolderPath}
+\begin{function}
+  ptr \code{osi::GetFolderPath}(int \var{folder});
+\end{function}\antipar
+
+The \code{osi::GetFolderPath} function uses the
+\code{SHGetFolderPathW} function in \texttt{shell32.dll} to return
+the current folder path string for the given \var{folder} when
+successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetFullPath}
+\begin{function}
+  ptr \code{osi::GetFullPath}(ptr \var{path});
+\end{function}\antipar
+
+The \code{osi::GetFullPath} function uses the
+\code{GetFullPathNameW} function in \texttt{kernel32.dll} to return
+the full path of the given \var{path} string when successful and an
+error pair when unsuccessful.
+
+\defineentry{osi::WatchDirectory}
+\begin{function}
+  ptr \code{osi::WatchDirectory}(ptr \var{path}, bool \var{subtree}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::WatchDirectory} function uses the
+\code{ReadDirectoryChangesW} function in \texttt{kernel32.dll} to
+track changes in the directory \var{path}. When \var{subtree} is true,
+the directory tree rooted at \var{path} is watched. The directory
+\var{path} is opened with share mode \texttt{FILE\_SHARE\_READ},
+\texttt{FILE\_SHARE\_WRITE}, and \texttt{FILE\_SHARE\_DELETE}. The
+change filter is configured to detect creating, renaming, and deleting
+files and directories as well as changes to the size and last-write
+time of files. Changes to file attributes, last-access and creation
+times, and security attributes are not included.
+
+Every time changes are detected, a completion packet
+\code{(\var{callback} ((\var{action} . \var{filename}) \etc))} is
+enqueued. The \var{action} number is defined by the
+\texttt{FILE\_NOTIFY\_INFORMATION} type as follows:
+
+\begin{center}\begin{tabular}{ll}
+  \var{action} & Meaning\\
+  \hline
+  1 & \var{filename} was added to the directory.\\
+  2 & \var{filename} was removed from the directory.\\
+  3 & \var{filename} was modified.\\
+  4 & \var{filename} was renamed, and \var{filename} is the old
+  name.\\
+  5 & \var{filename} was renamed, and \var{filename} is the new
+  name.\\
+\end{tabular}\end{center}
+
+The \code{osi::WatchDirectory} function returns a directory watcher
+handle. When the handle is closed by
+\code{osi::CloseDirectoryWatcher}, the completion packet
+\code{(\var{callback} 0)} is enqueued.
+
+If \code{ReadDirectoryChangesW} raises error number \var{errno}, the
+completion packet \code{(\var{callback} \var{errno})} is enqueued.
+The watcher will enqueue no more completion packets and should be
+closed.
+
+\defineentry{osi::CloseDirectoryWatcher}
+\begin{function}
+  ptr \code{osi::CloseDirectoryWatcher}(iptr \var{watcher});
+\end{function}\antipar
+
+The \code{osi::CloseDirectoryWatcher} function closes the directory
+watcher handle \var{watcher} from \code{osi::WatchDirectory}. It
+returns \code{\#t} when successful and an error pair otherwise.
+
+\subsection {Console Functions}
+
+\defineentry{osi::OpenConsole}
+\begin{function}
+  iptr \code{osi::OpenConsole}();
+\end{function}\antipar
+
+The \code{osi::OpenConsole} function returns a handle to a port that
+reads from the standard input of the current process. Because the
+standard input handle is opened in blocking mode, the read operations
+use a worker thread. When the port is closed, the standard input
+handle is left open so that other agents such as the C++ run-time
+library may still use it.
+
+\subsection {TCP/IP Functions}
+
+\defineentry{osi::ConnectTCP}
+\begin{function}
+  ptr \code{osi::ConnectTCP}(ptr \var{nodename}, ptr \var{servname}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::ConnectTCP} function uses a worker thread to
+establish a TCP/IP connection to host \var{nodename} on port
+\var{servname}. It returns \code{\#t} when the worker thread starts
+and an error pair otherwise. The \var{nodename} string may be a host
+name or numeric host address string, and the \var{servname} string may
+be a service name or port number represented as a string. The worker
+thread uses the \code{GetAddrInfoW} function of \texttt{ws2\_32.dll}
+to retrieve a list of addresses. For the first address for which a
+connection succeeds, the completion packet \code{(\var{callback}
+  \var{port})} is enqueued, where \var{port} is a handle to a port
+that reads from and writes to this connection. If all addresses fail,
+the completion packet \code{(\var{callback} \var{error-pair})} is
+enqueued.
+
+\defineentry{osi::ListenTCP}
+\begin{function}
+  ptr \code{osi::ListenTCP}(UINT16 \var{portNumber});
+\end{function}\antipar
+
+The \code{osi::ListenTCP} function binds a TCP/IP socket with
+\code{SO\_EXCLUSIVEADDRUSE} set to true that listens on all
+available IPv4 and IPv6 interfaces for incoming connections on the
+given \var{portNumber} when successful and an error pair when
+unsuccessful. It returns a fixnum handle called a \emph{listener} that
+is used in calls to \code{osi::CloseTCPListener} and
+\code{osi::AcceptTCP}. If \var{portNumber} is zero, the operating
+system will choose an available port number, which can be queried
+using \code{osi::GetListenerPortNumber}.
+
+\defineentry{osi::CloseTCPListener}
+\begin{function}
+  ptr \code{osi::CloseTCPListener}(iptr \var{listener});
+\end{function}\antipar
+
+The \code{osi::CloseTCPListener} function closes the given TCP/IP
+\var{listener} opened by \code{osi::ListenTCP}, which causes all
+outstanding \code{osi::AcceptTCP} worker threads to complete with an
+appropriate error pair. It returns \code{\#t} when successful and an
+error pair when unsuccessful.
+
+\defineentry{osi::AcceptTCP}
+\begin{function}
+  ptr \code{osi::AcceptTCP}(iptr \var{listener}, ptr \var{callback});
+\end{function}\antipar
+
+The \code{osi::AcceptTCP} function uses a worker thread that
+accepts\footnote{The \code{AcceptEx} function is not used because of
+  its complexity.} an incoming TCP/IP connection on the given TCP/IP
+\var{listener} opened by \code{osi::ListenTCP}. It returns
+\code{\#t} when the worker thread starts and an error pair
+otherwise. When a connection is accepted, the completion packet
+\code{(\var{callback} \var{port})} is enqueued, where \var{port} is
+a handle to a port that reads from and writes to this connection. When
+it fails to accept, the completion packet \code{(\var{callback}
+  \var{error-pair})} is enqueued.
+
+\defineentry{osi::GetIPAddress}
+\begin{function}
+  ptr \code{osi::GetIPAddress}(iptr \var{port});
+\end{function}\antipar
+
+The \code{osi::GetIPAddress} function uses the \code{getpeername}
+and \code{WSAAddressToStringW} functions in \texttt{ws2\_32.dll} to
+return a string representation of the address of the peer of a TCP/IP
+\var{port} opened by \code{osi::ConnectTCP} or
+\code{osi::AcceptTCP} when successful and an error pair otherwise.
+
+\defineentry{osi::GetListenerPortNumber}
+\begin{function}
+  ptr \code{osi::GetListenerPortNumber}(iptr \var{listener});
+\end{function}\antipar
+
+The \code{osi::GetListenerPortNumber} function returns the port
+number of the given TCP/IP \var{listener} opened by
+\code{osi::ListenTCP} when successful and an error pair when
+unsuccessful.
+
+\subsection {Information Functions}
+
+\defineentry{osi::CompareStringLogical}
+\begin{function}
+  ptr \code{osi::CompareStringLogical}(ptr \var{s1}, ptr \var{s2});
+\end{function}\antipar
+
+The \code{osi::CompareStringLogical} function performs a logical
+string comparison on strings \var{s1} and \var{s2} using the
+\code{StrCmpLogicalW} function in \texttt{shlwapi.dll}.  It returns
+$-1$ if $\var{s1} < \var{s2}$, 0 if $\var{s1} = \var{s2}$, 1 if
+$\var{s1} > \var{s2}$, and the error pair
+\code{(osi::CompareStringLogical . \textrm{ERROR\_BAD\_ARGUMENTS})}
+if \var{s1} or \var{s2} is not a string.
+
+\defineentry{osi::CreateGUID}
+\begin{function}
+  ptr \code{osi::CreateGUID}();
+\end{function}\antipar
+
+The \code{osi::CreateGUID} function returns a new globally unique
+identifier (GUID) as a bytevector using the \code{UuidCreate}
+function in \texttt{rpcrt4.dll}.
+
+\defineentry{guid->string}
+\begin{procedure}
+  \code{(guid->string \var{guid})}
+\end{procedure}
+\returns{} a string
+
+The \code{guid->string} procedure returns the uppercase hexadecimal
+string representation of \var{guid},
+$\var{HH}_3\var{HH}_2\var{HH}_1\var{HH}_0\code{-}\var{HH}_5\var{HH}_4\code{-}\var{HH}_7\var{HH}_6\code{-}\var{HH}_8\var{HH}_9\code{-}\var{HH}_{10}\var{HH}_{11}\var{HH}_{12}\var{HH}_{13}\var{HH}_{14}\var{HH}_{15}$,
+where $\var{HH}_i$ is the 2-character uppercase hexadecimal
+representation of the octet at index $i$ of bytevector \var{guid}.  If
+\var{guid} is not a bytevector of length 16, exception
+\code{\#(bad-arg guid->string \var{guid})} is raised.
+
+\defineentry{string->guid}
+\begin{procedure}
+  \code{(string->guid \var{s})}
+\end{procedure}
+\returns{} a GUID bytevector
+
+The \code{string->guid} procedure returns the bytevector \var{guid}
+for string \var{s} such that \code{(guid->string \var{guid})} is
+equivalent to \var{s}, ignoring case. If \var{s} is not a string with
+uppercase or lowercase hexadecimal digits and hyphens as shown in
+\code{guid->string}, exception \code{\#(bad-arg string->guid
+  \var{s})} is raised.
+
+\defineentry{osi::GetBytesUsed}
+\begin{function}
+  size\_t \code{osi::GetBytesUsed}();
+\end{function}\antipar
+
+The \code{osi::GetBytesUsed} function returns the number of bytes
+used by the C++ run-time heap.
+
+\defineentry{osi::GetComputerName}
+\begin{function}
+  ptr \code{osi::GetComputerName}();
+\end{function}\antipar
+
+The \code{osi::GetComputerName} function uses the
+\code{GetComputerNameW} function in \texttt{kernel32.dll} to return
+the NetBIOS name of the computer when successful and an error pair
+when unsuccessful.
+
+\defineentry{osi::GetErrorString}
+\begin{function}
+  ptr \code{osi::GetErrorString}(UINT32 \var{errorNumber});
+\end{function}\antipar
+
+The \code{osi::GetErrorString} function returns the message string
+for the given error number or \code{\#f} when unavailable.
+
+For mapped SQLite error numbers between 600,000,000 and 600,999,999
+inclusive, it returns the SQLite English error string from the
+\code{sqlite3\_errstr} function.
+
+For all other error numbers, it calls the \code{FormatMessageW}
+function in \texttt{kernel32.dll} to retrieve the system error message
+in the language specified by id 0. If \code{FormatMessageW} fails,
+\code{osi::GetErrorString} returns an error pair.
+
+\defineentry{osi::GetHandleCounts}
+\begin{function}
+  ptr \code{osi::GetHandleCounts}();
+\end{function}\antipar
+
+The \code{osi::GetHandleCounts} function returns the count of each
+handle type as the vector
+\code{\#(<handle-counts> \var{port-count} \var{process-count}
+  \var{database-count} \var{statement-count} \var{listener-count}
+  \var{hash-count})}.
+
+\defineentry{osi::GetMemoryInfo}
+\begin{function}
+  ptr \code{osi::GetMemoryInfo}();
+\end{function}\antipar
+
+The \code{osi::GetMemoryInfo} function uses the
+\code{GetProcessMemoryInfo} function in \texttt{psapi.dll} to return
+the contents of the PROCESS\_MEMORY\_COUNTERS\_EX structure
+as
+\code{\#(<memory-info>
+\var{PageFaultCount}
+\var{PeakWorkingSetSize}
+\var{WorkingSetSize}
+\var{QuotaPeakPagedPoolUsage}
+\var{QuotaPagedPoolUsage}
+\var{QuotaPeakNonPagedPoolUsage}
+\var{QuotaNonPagedPoolUsage}
+\var{PagefileUsage}
+\var{PeakPagefileUsage}
+\var{PrivateUsage})}
+when successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetPerformanceCounter}
+\begin{function}
+  ptr \code{osi::GetPerformanceCounter}();
+\end{function}\antipar
+
+The \code{osi::GetPerformanceCounter} function uses the
+\code{QueryPerformanceCounter} function in \texttt{kernel32.dll} to
+return the current performance-counter value in counts when successful
+and an error pair when unsuccessful.
+
+\defineentry{osi::GetPerformanceFrequency}
+\begin{function}
+  ptr \code{osi::GetPerformanceFrequency}();
+\end{function}\antipar
+
+The \code{osi::GetPerformanceFrequency} function uses the
+\code{QueryPerformanceFrequency} function in \texttt{kernel32.dll}
+to return the current performance-counter frequency in counts per
+second when successful and an error pair when unsuccessful.
+
+\defineentry{osi::GetTickCount}
+\begin{function}
+  ptr \code{osi::GetTickCount}();
+\end{function}\antipar
+
+The \code{osi::GetTickCount} function returns the number of
+milliseconds in UTC since the UNIX epoch January 1, 1970. It uses the
+\code{timeGetTime} function in \texttt{mmsystem.dll} to retrieve an
+unsigned 32-bit millisecond counter that wraps around every $2^{32}$
+days, which is about 49.71 days.  It adds an offset determined by
+\code{GetSystemTimeAsFileTime} in \texttt{kernel32.dll} when the
+program starts and every time the system resumes from sleep or
+hibernation.  The Scheme code polls the completion port with
+\code{osi::IsCompletionPacketReady} in its software timer interrupt
+routine and calls \code{osi::GetCompletionPacket} when a completion
+packet is ready or there are no processes in its run queue. Since at
+least one of these functions is called every 49.71 days, the operating
+system interface detects and accounts for the wrap-around condition in
+these functions as well as in \code{osi::GetTickCount}.
+
+This approach is used instead of simply calling
+\code{GetSystemTimeAsFileTime} because the tick count needs to be
+unaffected by changes to the system clock and time zone.  The tick
+counter pauses when the computer sleeps or hibernates.
+
+\defineentry{osi::SetTick}
+\begin{function}
+  void \code{osi::SetTick}();
+\end{function}\antipar
+
+The \code{osi::SetTick} function sets the threshold for
+\code{osi::IsTickOver} to be the current tick count plus one.
+
+\defineentry{osi::IsTickOver}
+\begin{function}
+  int \code{osi::IsTickOver}();
+\end{function}\antipar
+
+The \code{osi::IsTickOver} function returns true if the current tick
+count is greater than the threshold set by the most recent call to
+\code{osi::SetTick} and false otherwise.
+
+\defineentry{osi::IsService}
+\begin{function}
+  int \code{osi::IsService}();
+\end{function}\antipar
+
+The \code{osi::IsService} function returns true when the program is
+running as a service and false otherwise.
+
+\subsection {Hash Functions}
+
+The operating system interface uses the Microsoft CryptoAPI in
+\code{advapi32.dll} to provide hash functions using the Microsoft AES
+Cryptographic Provider. When a hash object is opened, the operating
+system interface tracks the object until it is closed in order to
+avoid passing an invalid object to the CryptoAPI. Functions passed an
+invalid hash handle return error pair \code{(\var{function-name}
+  . \textrm{ERROR\_INVALID\_HANDLE})}.
+
+\defineentry{osi::OpenHash}
+\begin{function}
+  ptr \code{osi::OpenHash}(ALG\_ID \var{alg});
+\end{function}\antipar
+
+The \code{osi::OpenHash} function uses \code{CryptAcquireContextW} and
+\code{CryptCreateHash} to create a hash object with the algorithm
+specified by \var{alg}. It acquires the context only once and stores
+it in a static variable. Algorithm identifiers \code{ALG\_MD5},
+\code{ALG\_SHA1}, \code{ALG\_SHA\_256}, \code{ALG\_SHA\_384}, and
+\code{ALG\_SHA\_512} are exported from \code{(swish osi)}. The
+function returns a hash handle when successful and an error pair when
+unsuccessful.
+
+\defineentry{osi::HashData}
+\begin{function}
+  ptr \code{osi::HashData}(iptr \var{hash}, ptr \var{buffer}, size\_t \var{startIndex}, UINT32 \var{size});
+\end{function}\antipar
+
+The \code{osi::HashData} function uses \code{CryptHashData} to add
+\var{size} bytes from the bytevector \var{buffer} at the zero-based
+\var{startIndex} to the \var{hash} handle opened by
+\code{osi::OpenHash}. The function returns \code{\#t} when successful
+and an error pair when unsuccessful.
+
+\defineentry{osi::GetHashValue}
+\begin{function}
+  ptr \code{osi::GetHashValue}(iptr \var{hash});
+\end{function}
+
+The \code{osi::GetHashValue} function uses \code{CryptGetHashParam} to
+retrieve the hash value for the \var{hash} handle opened by
+\code{osi::OpenHash}. It returns a bytevector when successful and an
+error pair when unsuccessful. Once this function has been called on a
+hash handle, no more data can be added to it with
+\code{osi::HashData}.
+
+\defineentry{osi::CloseHash}
+\begin{function}
+  ptr \code{osi::CloseHash}(iptr \var{hash});
+\end{function}
+
+The \code{osi::CloseHash} function uses \code{CryptDestroyHash} to
+deallocate the \var{hash} handle opened by \code{osi::OpenHash}. It
+returns \code{\#t} when successful and an error pair when
+unsuccessful.

@@ -1,0 +1,12 @@
+*.VC.db
+*.html
+*.mo
+*.opensdf
+*.sdf
+*.so
+*.suo
+*.user
+Debug/
+Hooks/
+Release/
+ipch/

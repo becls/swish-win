@@ -1,0 +1,9 @@
+*.boot
+!petite.boot
+!scheme.boot
+*.exe
+*.ilk
+*.iobj
+*.ipdb
+*.pdb
+*.so

@@ -1,0 +1,17 @@
+#!/bin/bash -e
+cp ChezScheme/boot/a6nt/{petite,scheme}.boot bin/a6nt
+cp ChezScheme/boot/a6nt/scheme.h lib/a6nt
+pushd ChezScheme
+./configure -m=a6nt
+make -C a6nt/c
+popd
+cp ChezScheme/a6nt/boot/a6nt/csv95mt.lib lib/a6nt
+rm -rf ChezScheme/a6nt
+cp ChezScheme/boot/i3nt/{petite,scheme}.boot bin/i3nt
+cp ChezScheme/boot/i3nt/scheme.h lib/i3nt
+pushd ChezScheme
+./configure -m=i3nt
+make -C i3nt/c
+popd
+cp ChezScheme/i3nt/boot/i3nt/csv95mt.lib lib/i3nt
+rm -rf ChezScheme/i3nt

@@ -1,0 +1,10 @@
+#!/bin/bash -e
+NSIS="$(regtool get -q --wow32 /machine/SOFTWARE/NSIS/)" ||
+  (echo "NSIS is not installed."; exit 1)
+MAKENSIS=$(cygpath "$NSIS\\makensis.exe")
+if [[ ! -x "$MAKENSIS" ]]
+then
+  echo "NSIS is not installed."
+  exit 1
+fi
+"$MAKENSIS" "$@"
