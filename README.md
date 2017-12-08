@@ -4,10 +4,11 @@ The Swish Concurrency Engine is a framework used to write fault-tolerant program
 
 # Build system requirements
 
-- Microsoft Windows 7, 8 or 10
+- Microsoft Windows 10
 - Cygwin with bash, git, grep, perl, texlive, etc.
 - Graphviz 2.30
 - Microsoft Visual Studio 2017
+- Microsoft Windows Software Development Kit - Windows 10.0.16299
 - NSIS 2.46
 
 ## Target system requirements
