@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-do "fix-info.pl";
+do "./fix-info.pl";
 
 $versionrc = $version;
 $versionrc =~ s/\./,/g;

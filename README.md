@@ -12,7 +12,7 @@ The Swish Concurrency Engine is a framework used to write fault-tolerant program
 
 ## Target system requirements
 
-- Microsoft Windows Vista or later. A 64-bit version is required to run code compiled for 64-bit Windows.
+- Microsoft Windows 7 or later. A 64-bit version is required to run code compiled for 64-bit Windows.
 - Administrator rights for the installation
 
 ## Make the documentation

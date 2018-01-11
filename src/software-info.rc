@@ -14,7 +14,7 @@ VS_VERSION_INFO VERSIONINFO
    VALUE "CompanyName", "Beckman Coulter, Inc."
    VALUE "FileDescription", "Swish"
    VALUE "FileVersion", "1.0.0.0"
-   VALUE "LegalCopyright", "© 2017 Beckman Coulter, Inc."
+   VALUE "LegalCopyright", "© 2017-2018 Beckman Coulter, Inc."
    VALUE "InternalName", "Swish.exe"
    VALUE "ProductName", "Swish"
    VALUE "ProductVersion", "1.0.0.0"

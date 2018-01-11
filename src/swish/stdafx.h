@@ -20,7 +20,7 @@
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#define WINVER 0x0600 // Windows Vista
+#define WINVER 0x0601 // Windows 7
 #define _WIN32_WINNT WINVER
 #define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
 #include <windows.h>
