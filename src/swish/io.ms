@@ -323,7 +323,7 @@
       (move-file fn fn2 'replace)
       (assert (not (file-exists? fn)))
       (assert (file-exists? fn2))
-      (watch-callback `((2 . "basic")))
+      (watch-callback `((2 . "moved") (4 . "basic") (5 . "moved")))
       (DeleteFile fn2)
       (watch-callback `((2 . "moved")))
       (close-directory-watcher watcher)
