@@ -1,4 +1,5 @@
 #!/usr/bin/perl
+use autodie;
 
 do "./fix-info.pl";
 

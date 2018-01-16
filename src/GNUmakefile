@@ -1,10 +1,10 @@
 BUILD := Release
-NAME := $(shell ./software-info.pl software-internal-name)
-PRODUCT := $(shell ./software-info.pl software-product-name)
-VERSION := $(shell ./software-info.pl software-version)
-COMPANY := $(shell ./software-info.pl software-company)
-COMPANYDIR := $(shell ./software-info.pl software-company-dir)
-YEAR := $(shell ./software-info.pl software-copyright-year)
+NAME := $(shell ./get-software-info software-internal-name)
+PRODUCT := $(shell ./get-software-info software-product-name)
+VERSION := $(shell ./get-software-info software-version)
+COMPANY := $(shell ./get-software-info software-company)
+COMPANYDIR := $(shell ./get-software-info software-company-dir)
+YEAR := $(shell ./get-software-info software-copyright-year)
 INFO := software-info.ss
 SFILES := $(shell find . -iname "*.ss" -printf '%p ')
 
@@ -13,18 +13,18 @@ build: exe32 ../bin/i3nt/$(NAME).boot
 
 ../bin/i3nt/$(NAME).boot: ../bin/i3nt/$(NAME).exe $(INFO) $(SFILES)
 	find ../bin/i3nt/ -name "*.so" -delete
-	./scheme32 --script build.ss $(NAME)
+	../bin/i3nt/$(NAME).exe -b scheme.boot --libdirs ".;;..\\bin\\i3nt" --script build.ss $(NAME) 2>&1 | ./build-filter
 
 ../bin/a6nt/$(NAME).boot: ../bin/a6nt/$(NAME).exe $(INFO) $(SFILES)
 	find ../bin/a6nt/ -name "*.so" -delete
-	./scheme64 --script build.ss $(NAME)
+	../bin/a6nt/$(NAME).exe -b scheme.boot --libdirs ".;;..\\bin\\a6nt" --script build.ss $(NAME) 2>&1 | ./build-filter
 
 .PHONY: exe32 exe64
 exe32: ../bin/i3nt/$(NAME).exe
 exe64: ../bin/a6nt/$(NAME).exe
 
 swish/../software-info.rc: $(INFO)
-	./fix-rc.pl "$(NAME)" "$(PRODUCT)" "$(VERSION)" "$(COMPANY)" "$(COMPANYDIR)" "$(YEAR)" $@
+	./fix-rc "$(NAME)" "$(PRODUCT)" "$(VERSION)" "$(COMPANY)" "$(COMPANYDIR)" "$(YEAR)" $@
 
 ../bin/i3nt/$(NAME).exe:\
   swish/Swish.sln\
@@ -42,10 +42,10 @@ swish/../software-info.rc: $(INFO)
 
 .PHONY: install
 install: build install.nsi
-	./makensis install.nsi
+	./makensis /V2 install.nsi
 
 install.nsi: $(INFO)
-	./fix-nsi.pl "$(NAME)" "$(PRODUCT)" "$(VERSION)" "$(COMPANY)" "$(COMPANYDIR)" "$(YEAR)" $@
+	./fix-nsi "$(NAME)" "$(PRODUCT)" "$(VERSION)" "$(COMPANY)" "$(COMPANYDIR)" "$(YEAR)" $@
 
 .PHONY: clean
 clean:

@@ -1,6 +1,7 @@
 #!/usr/bin/perl
+use autodie;
 
-do "fix-info.pl";
+do "./fix-info.pl";
 
 $new =~ s/define COMPANY_DIR .*/define COMPANY_DIR "$companydir"/g;
 $new =~ s/define INTERNAL_NAME .*/define INTERNAL_NAME "$internal"/g;

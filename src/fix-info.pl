@@ -15,14 +15,6 @@ $filename = $ARGV[6];
 
 $copyright = "\251 $year $company";
 
-print "fixing info for $filename\n";
-print "  internal: $internal\n";
-print "  product: $product\n";
-print "  version: $version\n";
-print "  company: $company\n";
-print "  companydir: $companydir\n";
-print "  year: $year\n";
-
 open INPUT, $filename;
 @orig = <INPUT>;
 $orig = join "", @orig;

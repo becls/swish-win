@@ -1,0 +1,17 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use autodie;
+my @lines = qw();
+while (<STDIN>) {
+    push(@lines, $_);
+    next if (m/^compiling /);
+    next if (m/^\(time \(begin \(compile-file /);
+    next if (m/^    \d+/);
+    foreach $_ (@lines) {
+	print;
+    }
+    while (<STDIN>) {
+	print;
+    }
+}

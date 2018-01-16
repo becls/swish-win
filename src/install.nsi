@@ -3,8 +3,8 @@
 !define INTERNAL_NAME "Swish"
 !define PRODUCT_NAME "Swish"
 !define PRODUCT_PUBLISHER "Beckman Coulter, Inc."
-!define PRODUCT_VERSION "1.0.0.0"
-!define YEAR "2017"
+!define PRODUCT_VERSION "1.0.1.0"
+!define YEAR "2017-2018"
 
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 

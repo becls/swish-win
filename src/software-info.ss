@@ -9,7 +9,7 @@
    )
   (import (chezscheme))
 
-  ;; The content of this library is also parsed by software-info.pl
+  ;; The content of this library is also parsed by get-software-info
   ;; and used in the build system, so it must use simple string
   ;; definitions.
 
@@ -27,6 +27,6 @@
 
   (define software-product-name "Swish")
 
-  (define software-version "1.0.0.0")
+  (define software-version "1.0.1.0")
 
   )

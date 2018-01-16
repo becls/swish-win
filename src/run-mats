@@ -1,5 +1,5 @@
 #!/bin/bash -e
-name=$(./software-info.pl software-internal-name)
+name=$(./get-software-info software-internal-name)
 bits=32
 if [[ "$1" == "64" ]]; then
   bits=64
