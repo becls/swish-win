@@ -539,14 +539,7 @@
             (let ([next (q-next p)])
               (pcb-sleeping?-set! p #f)
               (@enqueue p run-queue 0)
-              (wake next))))))
-    (when (and (not (eq? self event-loop-process)) (IsCompletionPacketReady))
-      ;; Put event-loop-process first on run-queue.  Don't use
-      ;; @enqueue because it does a linear search in this case.
-      (when (enqueued? event-loop-process)
-        (remove event-loop-process))
-      (pcb-precedence-set! event-loop-process -1)
-      (insert event-loop-process (q-next run-queue))))
+              (wake next)))))))
 
   (define (@system-sleep-time)
     (cond
@@ -709,7 +702,7 @@
 
   (define (@event-loop)
     (do-callbacks (@system-sleep-time))
-    (yield run-queue 1)
+    (yield run-queue 0)
     (@event-loop))
 
   (define process-table (make-weak-eq-hashtable))
