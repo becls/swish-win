@@ -1,4 +1,4 @@
 #!/bin/bash
 unset temp tmp
 export TMP=$(cygpath -d /tmp)
-cmd /c "$(cygpath -w "$(dirname "$0")/vs.bat")" "$@"
+cmd /c "$(cygpath -w "$0.bat")" "$@"
