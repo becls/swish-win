@@ -1,3 +1,4 @@
+SHELL := /bin/bash -o pipefail
 BUILD := Release
 NAME := $(shell ./get-software-info software-internal-name)
 PRODUCT := $(shell ./get-software-info software-product-name)
